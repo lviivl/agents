@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux"
 
 import PiAnthropicService from "../../lib/models/pi-anthropic.js"
+import PiOpenAIService from "../../lib/models/pi-openai.js"
 import PiExecutor, { toPiTools } from "../../srv/pi-executor-srv.js"
 
 const originalRuntime = PiExecutor.runtime
@@ -59,6 +60,28 @@ describe("Pi executor", () => {
       headers: { "x-test": "configured" },
     })
     expect(await llm.getApiKey()).toBe(llm.options.apiKey)
+    expect(llm.streamFn).toBeTypeOf("function")
+  })
+
+  it("configures the Pi OpenAI model through a model service", async () => {
+    const llm = new PiOpenAIService("pi-test-llm", {
+      model: "gpt-5",
+      credentials: {
+        apiKey: "secret",
+        url: "https://example.test/v1",
+        headers: { "x-test": "configured" },
+      },
+    })
+
+    expect(llm.name).toBe("pi-test-llm")
+    expect(llm.model).toMatchObject({
+      id: "gpt-5",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://example.test/v1",
+      headers: { "x-test": "configured" },
+    })
+    expect(await llm.getApiKey()).toBe("secret")
     expect(llm.streamFn).toBeTypeOf("function")
   })
 
