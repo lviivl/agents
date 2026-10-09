@@ -6,6 +6,26 @@ import { publishedStatus, toPiTools } from "./pi-executor-srv.js"
 
 const LOG = cds.log("agents")
 
+function toRuntimeContext(context) {
+  let systemPrompt = context.systemPrompt || ""
+  const tools = new Map((context.tools || []).map((tool) => [tool.name, tool]))
+  const messages = []
+
+  for (const message of context.messages) {
+    if (message.role !== "system") {
+      messages.push(message)
+      continue
+    }
+    if (typeof message.content === "string" && message.content) {
+      systemPrompt += systemPrompt ? `\n\n${message.content}` : message.content
+    }
+    for (const tool of message.toolsAdded || []) tools.set(tool.name, tool)
+    for (const tool of message.toolsRemoved || []) tools.delete(tool.name)
+  }
+
+  return { systemPrompt, tools: [...tools.values()], messages }
+}
+
 /**
  * A2A executor backed by @sap/webagent AgentHarness.
  * Reuses the same CDS tool and model contracts as PiExecutor but delegates
@@ -41,29 +61,31 @@ export default class WebAgentExecutor {
       srv.send("buildSystemPrompt"),
     ])
 
-    if (!runtimeModel?.model) {
+    if (!runtimeModel?.model || typeof runtimeModel.streamFn !== "function") {
       throw new Error(
         "WebAgent executor requires a Pi-compatible model; configure a model kind such as pi-anthropic",
       )
     }
 
-    // AgentHarness's internal shim only supports "openai-completions". The pi-anthropic model uses
-    // "anthropic-messages", so we coerce the api field here. The caller must configure baseUrl to
-    // point at an OpenAI-compatible proxy (e.g. LiteLLM at http://localhost:6655/litellm/v1) and
-    // set modelName to the proxy's expected model ID (e.g. "anthropic/claude-sonnet-4-6" for LiteLLM).
-    const model = { ...runtimeModel.model, api: "openai-completions" }
-
-    // AgentHarnessConfig has no systemPrompt field — must be patched onto agent.state after construction.
-    // authToken must be a static string; AgentHarness does not accept a getter function.
-    const authToken = runtimeModel.getApiKey ? await runtimeModel.getApiKey() : runtimeModel.authToken
-
+    const authToken = runtimeModel.getApiKey
+      ? await runtimeModel.getApiKey()
+      : runtimeModel.authToken
+    const runtimeStream = (model, context, options) =>
+      runtimeModel.streamFn(model, toRuntimeContext(context), options)
+    const runtimeComplete = (model, context, options) =>
+      runtimeModel.completeFn
+        ? runtimeModel.completeFn(model, toRuntimeContext(context), options)
+        : runtimeStream(model, context, options).result()
     const harness = new AgentHarness({
-      model,
+      model: runtimeModel.model,
       authToken,
+      systemPrompt,
+      transport: { stream: runtimeStream, complete: runtimeComplete },
       tools: toPiTools(tools),
       onEvent(event) {
         const update = event?.assistantMessageEvent
-        if (event?.type !== "message_update" || update?.type !== "text_delta" || !update.delta) return
+        if (event?.type !== "message_update" || update?.type !== "text_delta" || !update.delta)
+          return
         eventBus.publish({
           kind: "artifact-update",
           taskId,
@@ -75,10 +97,6 @@ export default class WebAgentExecutor {
         streamed.value = true
       },
     })
-
-    if (systemPrompt) {
-      harness.agent.state.systemPrompt = systemPrompt
-    }
 
     return harness
   }
@@ -119,7 +137,8 @@ export default class WebAgentExecutor {
       const prompt = partsToText(requestContext.userMessage?.parts)
       const output = await harness.prompt(prompt)
 
-      if (controller.signal.aborted) throw new globalThis.DOMException("Task canceled", "AbortError")
+      if (controller.signal.aborted)
+        throw new globalThis.DOMException("Task canceled", "AbortError")
       if (harness.state?.errorMessage) throw new Error(harness.state.errorMessage)
 
       eventBus.publish({
@@ -140,7 +159,8 @@ export default class WebAgentExecutor {
         : production && error?.$sanitize !== false
           ? cds.i18n.messages.at(500) || "Internal Server Error"
           : `Agent error: ${error.message}`
-      if (!canceled) LOG.error("WebAgent executor failed", { service: srv.name, error: error.message })
+      if (!canceled)
+        LOG.error("WebAgent executor failed", { service: srv.name, error: error.message })
       eventBus.publish(publishedStatus(taskId, contextId, state, text, true))
     } finally {
       this._running.delete(taskId)

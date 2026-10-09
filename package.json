@@ -177,6 +177,11 @@
           "model": "anthropic--claude-4.6-sonnet",
           "contentFilter": true
         },
+        "pi-aicore": {
+          "impl": "@cap-js/agents/lib/models/pi-aicore",
+          "model": "anthropic--claude-4.6-sonnet",
+          "contentFilter": true
+        },
         "anthropic": {
           "impl": "@cap-js/agents/lib/models/anthropic"
         },
@@ -231,6 +236,12 @@
       },
       "[webagent]": {
         "agent-executor": "webagent",
+        "[hybrid]": {
+          "llm": "pi-aicore"
+        },
+        "[production]": {
+          "llm": "pi-aicore"
+        },
         "[with-claude]": {
           "llm": "pi-anthropic"
         },
