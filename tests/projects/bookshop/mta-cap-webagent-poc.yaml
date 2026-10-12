@@ -1,0 +1,151 @@
+_schema-version: 3.3.0
+ID: bookshop-ai-demo
+version: 1.0.0
+description: "Bookshop WebAgent demo with Anthropic and OpenAI models"
+parameters:
+  enable-parallel-deployments: true
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - mkdir -p ../../../node_modules/@sap
+        - ln -sfn ../../../../joule-studio/webagent-shared-harness-transport ../../../node_modules/@sap/webagent
+        - npx cds build --production
+        - npm pack ../../.. --pack-destination gen/srv
+        - mkdir -p gen/webagent-package
+        - cp -R ../../../../../joule-studio/webagent-shared-harness-transport/dist gen/webagent-package/dist
+        - cp ../../../../../joule-studio/webagent-shared-harness-transport/package.json ../../../../../joule-studio/webagent-shared-harness-transport/README.md gen/webagent-package
+        - npm pkg delete dependencies devDependencies scripts overrides --prefix gen/webagent-package
+        - npm pack --ignore-scripts ./gen/webagent-package --pack-destination gen/srv
+        - find gen/srv -maxdepth 1 -name 'cap-js-agents-*.tgz' -exec npm i {} --prefix gen/srv \;
+        - find gen/srv -maxdepth 1 -name 'sap-webagent-*.tgz' -exec npm i {} --prefix gen/srv \;
+        - cp -R gen/srv gen/srv-anthropic
+        - cp -R gen/srv gen/srv-openai
+modules:
+  - name: bookshop-srv-anthropic
+    type: nodejs
+    path: gen/srv-anthropic
+    parameters:
+      instances: 1
+      buildpack: nodejs_buildpack
+    properties:
+      CDS_ENV: production,webagent
+      cds_requires_llm_kind: pi-aicore
+      cds_requires_llm_model: anthropic--claude-4.6-sonnet
+    build-parameters:
+      builder: npm-ci
+    provides:
+      - name: srv-anthropic-api
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: bookshop-auth
+      - name: bookshop-db
+      - name: bookshop-ai
+
+  - name: bookshop-srv-openai
+    type: nodejs
+    path: gen/srv-openai
+    parameters:
+      instances: 1
+      buildpack: nodejs_buildpack
+    properties:
+      CDS_ENV: production,webagent
+      cds_requires_llm_kind: pi-aicore
+      cds_requires_llm_model: gpt-5.6-luna
+    build-parameters:
+      builder: npm-ci
+    provides:
+      - name: srv-openai-api
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: bookshop-auth
+      - name: bookshop-db
+      - name: bookshop-ai
+
+  - name: bookshop-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: bookshop-db
+
+  - name: bookshop-anthropic
+    type: approuter.nodejs
+    path: app/router
+    parameters:
+      keep-existing-routes: true
+      disk-quota: 256M
+      memory: 256M
+    requires:
+      - name: srv-anthropic-api
+        group: destinations
+        properties:
+          name: srv-api
+          url: ~{srv-url}
+          forwardAuthToken: true
+      - name: bookshop-auth
+    provides:
+      - name: app-anthropic-api
+        properties:
+          app-protocol: ${protocol}
+          app-uri: ${default-uri}
+
+  - name: bookshop-openai
+    type: approuter.nodejs
+    path: app/router
+    parameters:
+      keep-existing-routes: true
+      disk-quota: 256M
+      memory: 256M
+    requires:
+      - name: srv-openai-api
+        group: destinations
+        properties:
+          name: srv-api
+          url: ~{srv-url}
+          forwardAuthToken: true
+      - name: bookshop-auth
+    provides:
+      - name: app-openai-api
+        properties:
+          app-protocol: ${protocol}
+          app-uri: ${default-uri}
+
+resources:
+  - name: bookshop-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: bookshop-ai-demo-${org}-${space}
+        tenant-mode: dedicated
+        oauth2-configuration:
+          credential-types:
+            - "binding-secret"
+            - "x509"
+          redirect-uris:
+            - https://*~{app-anthropic-api/app-uri}/**
+            - https://*~{app-openai-api/app-uri}/**
+        role-collections:
+          - name: "admin (bookshop AI demo ${org}-${space})"
+            description: "generated"
+            role-template-references:
+              - "$XSAPPNAME.admin"
+    requires:
+      - name: app-anthropic-api
+      - name: app-openai-api
+  - name: bookshop-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana
+      service-plan: hdi-shared
+  - name: bookshop-ai
+    type: org.cloudfoundry.existing-service
+    parameters:
+      service-name: cap-webagent-poc-aicore

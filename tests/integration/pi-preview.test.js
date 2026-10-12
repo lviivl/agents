@@ -11,7 +11,7 @@ import preview from "../../lib/preview/preview.js"
 
 describe("Pi chat preview", () => {
   it("renders chat.html and handles its message/send request through Pi", async () => {
-    const router = preview("Pi Agent")
+    const router = preview("Pi Agent", "mock-model")
     const previewRoute = router.stack.find((layer) => layer.route?.path === "/")
     const previewHandler = previewRoute.route.stack[0].handle
     let html
@@ -25,7 +25,7 @@ describe("Pi chat preview", () => {
       },
     )
 
-    expect(html).toContain("<h1>Pi Agent</h1>")
+    expect(html).toContain("<h1>Pi Agent (mock-model)</h1>")
     expect(html).toContain('method: useStream ? "message/stream" : "message/send"')
 
     const oldExecutor = cds.requires["agent-executor"]
